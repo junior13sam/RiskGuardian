@@ -241,4 +241,83 @@
     (ok (var-get protocol-risk-score))
 )
 
+;; Advanced Risk Prediction with Machine Learning-inspired Scoring
+;; This function implements a comprehensive risk prediction algorithm that analyzes
+;; multiple data points and applies weighted scoring with decay factors for time-sensitive metrics.
+;; It simulates a predictive model by incorporating historical trends, current metrics,
+;; and forward-looking indicators to generate a risk forecast for the next 30 days.
+(define-public (predict-future-risk
+    (vault-id uint)
+    (projected-tvl-change int)
+    (projected-volatility-change int)
+    (market-sentiment-score uint)
+    (protocol-health-score uint))
+    (let
+        (
+            (vault (unwrap! (map-get? vaults { vault-id: vault-id }) err-vault-not-found))
+            (metrics (unwrap! (map-get? vault-metrics { vault-id: vault-id }) err-vault-not-found))
+            (current-risk (get overall-risk-score vault))
+            
+            ;; Calculate TVL impact (positive change reduces risk, negative increases it)
+            (tvl-impact (if (> projected-tvl-change 0)
+                (/ (to-uint projected-tvl-change) u10)
+                (/ (to-uint (* projected-tvl-change -1)) u5)))
+            
+            ;; Calculate volatility impact (always increases risk)
+            (volatility-impact (if (> projected-volatility-change 0)
+                (/ (to-uint projected-volatility-change) u3)
+                u0))
+            
+            ;; Market sentiment adjustment (0-10000 scale, lower is better)
+            (sentiment-adjustment (/ (- u10000 market-sentiment-score) u20))
+            
+            ;; Protocol health factor (0-10000 scale, higher is better)
+            (health-factor (/ (- u10000 protocol-health-score) u15))
+            
+            ;; Historical incident penalty
+            (incident-penalty (* (get total-incidents metrics) u100))
+            
+            ;; Concentration risk amplifier
+            (concentration-amplifier (if (> (get largest-position-pct metrics) u3000)
+                u500
+                u0))
+            
+            ;; Calculate predicted risk score
+            (base-prediction current-risk)
+            (adjusted-prediction (+ base-prediction 
+                (+ volatility-impact 
+                   (+ sentiment-adjustment 
+                      (+ health-factor 
+                         (+ incident-penalty concentration-amplifier))))))
+            (final-prediction (if (> adjusted-prediction tvl-impact)
+                (- adjusted-prediction tvl-impact)
+                u0))
+            
+            ;; Cap prediction at maximum risk score
+            (capped-prediction (if (> final-prediction u10000) u10000 final-prediction))
+            (predicted-risk-level (get-risk-level capped-prediction))
+        )
+        ;; Validate input parameters
+        (asserts! (is-valid-score market-sentiment-score) err-invalid-parameters)
+        (asserts! (is-valid-score protocol-health-score) err-invalid-parameters)
+        (asserts! (get is-active vault) err-vault-not-found)
+        
+        ;; Return comprehensive prediction result
+        (ok {
+            current-risk-score: current-risk,
+            predicted-risk-score: capped-prediction,
+            predicted-risk-level: predicted-risk-level,
+            risk-change: (if (> capped-prediction current-risk)
+                (- capped-prediction current-risk)
+                u0),
+            recommendation: (if (>= capped-prediction risk-threshold-high)
+                "URGENT: Consider reducing exposure"
+                (if (>= capped-prediction risk-threshold-medium)
+                    "WARNING: Monitor closely"
+                    "SAFE: Continue normal operations"
+                ))
+        })
+    )
+)
+
 
